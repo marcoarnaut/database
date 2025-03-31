@@ -1,0 +1,5 @@
+{
+    "database": "sqlite.js",
+    "errorMessage": "Database error occurred",
+    "setupMessage": "No data available"
+  }
