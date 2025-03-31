@@ -187,6 +187,146 @@ fastify.post('/api/teams/:team_id/roles', async (request) => {
   });
 });
 
+fastify.get('/api/users/:user_id/team', async (request) => {
+  return new Promise((resolve) => {
+    db.get(
+      `SELECT t.* FROM teams t
+       JOIN roles r ON t.team_id = r.team_id
+       WHERE r.user_id = ? AND t.server_id = ?`,
+      [request.params.user_id, request.query.server_id],
+      (err, row) => {
+        if (err) {
+          resolve({ success: false, error: err.message });
+        } else {
+          resolve({ success: true, data: row || null });
+        }
+      }
+    );
+  });
+});
+
+// Покинуть команду
+fastify.delete('/api/teams/:team_id/members/:user_id', async (request) => {
+  return new Promise((resolve) => {
+    db.run(
+      `DELETE FROM roles 
+       WHERE team_id = ? AND user_id = ? AND type != 'leader'`,
+      [request.params.team_id, request.params.user_id],
+      function(err) {
+        if (err) {
+          resolve({ success: false, error: err.message });
+        } else if (this.changes === 0) {
+          resolve({ success: false, error: 'Не удалось покинуть команду (возможно, вы лидер)' });
+        } else {
+          resolve({ success: true });
+        }
+      }
+    );
+  });
+});
+
+// Удалить участника (для лидера)
+fastify.delete('/api/teams/:team_id/members/:user_id/kick', async (request) => {
+  const { user_id, team_id } = request.params;
+  
+  return new Promise((resolve) => {
+    // Проверяем что инициатор - лидер команды
+    db.get(
+      `SELECT 1 FROM teams WHERE team_id = ? AND leader_id = ?`,
+      [team_id, request.query.leader_id],
+      (err, row) => {
+        if (err || !row) {
+          return resolve({ success: false, error: 'Только лидер может удалять участников' });
+        }
+
+        db.run(
+          `DELETE FROM roles 
+           WHERE team_id = ? AND user_id = ? AND type != 'leader'`,
+          [team_id, user_id],
+          function(err) {
+            if (err) {
+              resolve({ success: false, error: err.message });
+            } else if (this.changes === 0) {
+              resolve({ success: false, error: 'Не удалось удалить участника' });
+            } else {
+              resolve({ success: true });
+            }
+          }
+        );
+      }
+    );
+  });
+});
+
+// Распустить команду (для лидера или админа)
+fastify.delete('/api/teams/:team_id', async (request) => {
+  const { team_id } = request.params;
+  const { user_id, is_admin } = request.query;
+  
+  return new Promise((resolve) => {
+    // Проверяем что пользователь - лидер или админ
+    db.get(
+      `SELECT 1 FROM teams WHERE team_id = ? AND (leader_id = ? OR ? = 1)`,
+      [team_id, user_id, is_admin ? 1 : 0],
+      (err, row) => {
+        if (err || !row) {
+          return resolve({ 
+            success: false, 
+            error: 'Только лидер команды или администратор сервера может распускать команды' 
+          });
+        }
+
+        db.serialize(() => {
+          db.run(`DELETE FROM roles WHERE team_id = ?`, [team_id]);
+          db.run(`DELETE FROM teams WHERE team_id = ?`, [team_id], function(err) {
+            if (err) {
+              resolve({ success: false, error: err.message });
+            } else {
+              resolve({ success: true });
+            }
+          });
+        });
+      }
+    );
+  });
+});
+
+// Передать лидерство
+fastify.post('/api/teams/:team_id/transfer', async (request) => {
+  const { team_id } = request.params;
+  const { current_leader_id, new_leader_id } = request.body;
+  
+  return new Promise((resolve) => {
+    db.serialize(() => {
+      // Обновляем лидера в таблице teams
+      db.run(
+        `UPDATE teams SET leader_id = ? WHERE team_id = ? AND leader_id = ?`,
+        [new_leader_id, team_id, current_leader_id],
+        function(err) {
+          if (err || this.changes === 0) {
+            return resolve({ success: false, error: 'Не удалось передать лидерство' });
+          }
+          
+          // Обновляем роль в таблице roles
+          db.run(
+            `UPDATE roles SET user_id = ? 
+             WHERE team_id = ? AND type = 'leader'`,
+            [new_leader_id, team_id],
+            function(err) {
+              if (err) {
+                resolve({ success: false, error: err.message });
+              } else {
+                resolve({ success: true });
+              }
+            }
+          );
+        }
+      );
+    });
+  });
+});
+
+
 fastify.get('/api/ping', async () => {
   return { status: 'alive', time: new Date() };
 });

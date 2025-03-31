@@ -1,7 +1,7 @@
 {
-  "name": "hello-sqlite",
+  "name": "sqlite",
   "version": "0.1.1",
-  "description": "A Node app with SQLite database",
+  "description": "Sqlite database",
   "main": "server.js",
   "scripts": {
     "start": "mkdir -p .data && node server.js",
