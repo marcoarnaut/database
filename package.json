@@ -4,7 +4,7 @@
   "description": "Sqlite database",
   "main": "server.js",
   "scripts": {
-    "start": "mkdir -p .data && node server.js",
+    "start": "node server.js",
     "clean": "rm -rf node_modules package-lock.json",
     "reinstall": "npm run clean && npm install"
   },
