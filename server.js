@@ -336,6 +336,34 @@ fastify.get('/api/lobbies/:lobbyId/player-count', async (request) => {
   });
 });
 
+fastify.delete('/api/lobbies/:lobbyId', async (request, reply) => {
+  const { lobbyId } = request.params;
+  
+  return new Promise((resolve, reject) => {
+    db.run(
+      'DELETE FROM lobbies WHERE id = ?',
+      [lobbyId],
+      function(err) {
+        if (err) {
+          reject(err);
+        } else {
+          if (this.changes === 0) {
+            resolve({ success: false, message: 'Lobby not found' });
+          } else {
+            db.run(
+              'DELETE FROM lobby_players WHERE lobby_id = ?',
+              [lobbyId],
+              () => {
+                resolve({ success: true });
+              }
+            );
+          }
+        }
+      }
+    );
+  });
+});
+
 fastify.get('/api/ping', async () => {
   return { status: 'alive', time: new Date() };
 });
