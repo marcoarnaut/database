@@ -1,5 +1,6 @@
 const fastify = require('fastify')({ logger: true });
 const sqlite3 = require('sqlite3').verbose();
+const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
 
@@ -11,6 +12,24 @@ if (!fs.existsSync(dataDir)) {
   fs.chmodSync(dataDir, 0o777);
   console.log('Updated .data directory permissions to 777');
 }
+
+async function pingServer() {
+  try {
+    const response = await fetch("https://irradiated-closed-gear.glitch.me/ping");
+    
+    if (response.ok) {
+      console.log(`Ping successfully: ${response.status} ${response.statusText}`);
+    } else {
+      console.log(`Ping failed: ${response.status} ${response.statusText}`);
+    }
+  } catch (error) {
+    console.error('Ping error:', error.message);
+  }
+}
+
+pingServer();
+
+const interval = setInterval(pingServer, 60000);
 
 fastify.register(require('@fastify/cors'), {
   origin: '*',
