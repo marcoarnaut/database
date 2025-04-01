@@ -293,6 +293,49 @@ fastify.post('/api/lobbies/:lobbyId/close', async (request) => {
   });
 });
 
+fastify.post('/api/lobbies/:lobbyId/kick', async (request, reply) => {
+  const { lobbyId } = request.params;
+  const { team, role } = request.body;
+  
+  if (!team || !role) {
+    return reply.code(400).send({ error: 'Team and role are required' });
+  }
+
+  return new Promise((resolve, reject) => {
+    db.run(
+      `DELETE FROM lobby_players 
+       WHERE lobby_id = ? AND team = ? AND role = ?`,
+      [lobbyId, team, role],
+      function(err) {
+        if (err) {
+          reject(err);
+        } else {
+          if (this.changes === 0) {
+            resolve({ success: false, message: 'No player found in this position' });
+          } else {
+            resolve({ success: true });
+          }
+        }
+      }
+    );
+  });
+});
+
+fastify.get('/api/lobbies/:lobbyId/player-count', async (request) => {
+  const { lobbyId } = request.params;
+  
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT COUNT(*) as count FROM lobby_players WHERE lobby_id = ?`,
+      [lobbyId],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve({ count: row.count });
+      }
+    );
+  });
+});
+
 fastify.get('/api/ping', async () => {
   return { status: 'alive', time: new Date() };
 });
