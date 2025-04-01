@@ -59,6 +59,7 @@ function initializeDatabase() {
       guild_id TEXT NOT NULL,
       name TEXT NOT NULL,
       is_active BOOLEAN DEFAULT 1,
+      winner TEXT CHECK(winner IN ('light', 'dark')),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`);
 
@@ -368,21 +369,33 @@ fastify.post('/api/lobbies/:lobbyId/winner', async (request, reply) => {
   }
 
   return new Promise((resolve) => {
-    db.run(
-      'UPDATE lobbies SET winner = ?, is_active = 0 WHERE id = ?',
-      [winner, lobbyId],
-      function(err) {
-        if (err) {
-          console.error('Set winner error:', err);
-          reply.code(500).send({ error: 'Failed to set winner' });
-          resolve({ success: false });
-        } else if (this.changes === 0) {
-          resolve({ success: false, message: 'Lobby not found' });
-        } else {
-          resolve({ success: true });
-        }
+    db.get('SELECT 1 FROM lobbies WHERE id = ?', [lobbyId], (err, row) => {
+      if (err) {
+        console.error('Lobby check error:', err);
+        reply.code(500).send({ error: 'Database error' });
+        resolve({ success: false });
+        return;
       }
-    );
+
+      if (!row) {
+        resolve({ success: false, message: 'Lobby not found' });
+        return;
+      }
+
+      db.run(
+        'UPDATE lobbies SET winner = ?, is_active = 0 WHERE id = ?',
+        [winner, lobbyId],
+        function(err) {
+          if (err) {
+            console.error('Set winner error:', err);
+            reply.code(500).send({ error: 'Failed to set winner' });
+            resolve({ success: false });
+          } else {
+            resolve({ success: true });
+          }
+        }
+      );
+    });
   });
 });
 
