@@ -359,6 +359,33 @@ fastify.post('/api/lobbies/:lobbyId/kick', async (request, reply) => {
   });
 });
 
+fastify.post('/api/lobbies/:lobbyId/winner', async (request, reply) => {
+  const { lobbyId } = request.params;
+  const { winner } = request.body;
+
+  if (!['light', 'dark'].includes(winner)) {
+    return reply.code(400).send({ error: 'Invalid winner value' });
+  }
+
+  return new Promise((resolve) => {
+    db.run(
+      'UPDATE lobbies SET winner = ?, is_active = 0 WHERE id = ?',
+      [winner, lobbyId],
+      function(err) {
+        if (err) {
+          console.error('Set winner error:', err);
+          reply.code(500).send({ error: 'Failed to set winner' });
+          resolve({ success: false });
+        } else if (this.changes === 0) {
+          resolve({ success: false, message: 'Lobby not found' });
+        } else {
+          resolve({ success: true });
+        }
+      }
+    );
+  });
+});
+
 fastify.post('/api/lobbies/:lobbyId/close', async (request, reply) => {
   const { lobbyId } = request.params;
 
