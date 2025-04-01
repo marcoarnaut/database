@@ -10,7 +10,6 @@ try {
     fs.mkdirSync(dataDir, { 
       recursive: true,
       mode: 0o777
-      
     });
     console.log('Папка .data создана с правами 777');
   } else {
@@ -39,293 +38,260 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 });
 
 setInterval(() => {
-  fetch(`https://fate-striped-yam.glitch.me/api/ping`)
-    .then(() => console.log('Auto ping successfully (database)'))
-    .catch(e => console.error('Ping error:', e));
   fetch(`https://irradiated-closed-gear.glitch.me/ping`)
     .then(() => console.log('Auto ping successfully (discord bot)'))
     .catch(e => console.error('Ping error:', e));
 }, 120000);
 
+function generateId() {
+  return Math.random().toString(36).substring(2, 10);
+}
 
 function initDatabase() {
+  db.serialize(() => {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS lobbies (
+        id TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        is_active BOOLEAN DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS players (
+        id TEXT PRIMARY KEY,
+        discord_id TEXT NOT NULL,
+        discord_name TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS lobby_players (
+        lobby_id TEXT NOT NULL,
+        player_id TEXT NOT NULL,
+        team TEXT CHECK(team IN ('light', 'dark')),
+        role TEXT CHECK(role IN ('carry', 'mid', 'offlane', 'support', 'hardsupport')),
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (lobby_id, player_id),
+        FOREIGN KEY (lobby_id) REFERENCES lobbies (id) ON DELETE CASCADE,
+        FOREIGN KEY (player_id) REFERENCES players (id) ON DELETE CASCADE
+      )
+    `);
+
+    console.log('Database tables initialized');
+  });
+}
+
+fastify.post('/api/lobbies', async (request, reply) => {
+  const { guildId, name } = request.body;
+  
+  if (!guildId || !name) {
+    return reply.code(400).send({ error: 'Guild ID and name are required' });
+  }
+
+  const id = generateId();
   return new Promise((resolve, reject) => {
-    //
-    db.get("SELECT name FROM sqlite_master WHERE type='table'", (err) => {
-      if (err) {
-        console.error('Database connection error:', err);
-        return reject(err);
-      }
-
-      db.serialize(() => {
-        db.run(`DROP TABLE IF EXISTS roles`);
-        db.run(`DROP TABLE IF EXISTS teams`);
-        
-        db.run(`CREATE TABLE teams (
-          team_id TEXT PRIMARY KEY,
-          server_id TEXT NOT NULL,
-          name TEXT NOT NULL,
-          leader_id TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )`);
-        
-        db.run(`CREATE TABLE roles (
-          role_id TEXT PRIMARY KEY,
-          team_id TEXT NOT NULL,
-          type TEXT NOT NULL CHECK(type IN ('leader', 'carry', 'mid', 'offlane', 'support', 'hardsupport')),
-          user_id TEXT NOT NULL,
-          FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE,
-          UNIQUE(team_id, type)
-        )`);
-        
-        console.log('Database tables created successfully');
-        resolve();
-      });
-    });
-  });
-}
-
-function generateId() {
-  return Math.random().toString(36).substring(2, 9);
-}
-
-fastify.post('/api/teams', async (request) => {
-  const { server_id, name, leader_id } = request.body;
-  
-  if (!server_id || !name || !leader_id) {
-    return { success: false, error: 'Missing required fields' };
-  }
-
-  const team_id = `team_${generateId()}`;
-  
-  return new Promise((resolve) => {
     db.run(
-      `INSERT INTO teams (team_id, server_id, name, leader_id) 
-       VALUES (?, ?, ?, ?)`,
-      [team_id, server_id, name, leader_id],
+      'INSERT INTO lobbies (id, guild_id, name) VALUES (?, ?, ?)',
+      [id, guildId, name],
       function(err) {
         if (err) {
-          resolve({ success: false, error: err.message });
+          reject(err);
         } else {
+          resolve({ id, guildId, name });
+        }
+      }
+    );
+  });
+});
+
+fastify.get('/api/lobbies', async (request, reply) => {
+  const { guildId } = request.query;
+  if (!guildId) {
+    return reply.code(400).send({ error: 'Guild ID is required' });
+  }
+
+  return new Promise((resolve, reject) => {
+    db.all(
+      'SELECT id, name, is_active, created_at FROM lobbies WHERE guild_id = ?',
+      [guildId],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
+    );
+  });
+});
+
+fastify.post('/api/lobbies/:lobbyId/join', async (request, reply) => {
+  const { lobbyId } = request.params;
+  const { discordId, discordName, team, role } = request.body;
+  
+  if (!discordId || !team || !role) {
+    return reply.code(400).send({ error: 'Missing required fields' });
+  }
+
+  const roleTaken = await new Promise((resolve, reject) => {
+    db.get(
+      `SELECT 1 FROM lobby_players 
+       WHERE lobby_id = ? AND team = ? AND role = ?`,
+      [lobbyId, team, role],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(!!row);
+      }
+    );
+  });
+
+  if (roleTaken) {
+    return reply.code(400).send({ error: 'This role in the team is already taken' });
+  }
+
+  const playerId = await new Promise((resolve, reject) => {
+    db.get(
+      'SELECT id FROM players WHERE discord_id = ?',
+      [discordId],
+      (err, row) => {
+        if (err) return reject(err);
+        
+        if (row) {
+          resolve(row.id);
+        } else {
+          const newId = generateId();
           db.run(
-            `INSERT INTO roles (role_id, team_id, type, user_id)
-             VALUES (?, ?, ?, ?)`,
-            [`role_${generateId()}`, team_id, 'leader', leader_id],
+            'INSERT INTO players (id, discord_id, discord_name) VALUES (?, ?, ?)',
+            [newId, discordId, discordName],
             (err) => {
-              if (err) {
-                resolve({ success: false, error: 'Failed to assign leader role' });
-              } else {
-                resolve({ success: true, team_id });
-              }
+              if (err) reject(err);
+              else resolve(newId);
             }
           );
         }
       }
     );
   });
-});
 
-fastify.get('/api/teams/:server_id', async (request) => {
-  return new Promise((resolve) => {
-    db.all(
-      `SELECT t.*, 
-       (SELECT COUNT(*) FROM roles WHERE team_id = t.team_id) as members_count
-       FROM teams t WHERE server_id = ?`,
-      [request.params.server_id],
-      (err, rows) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO lobby_players (lobby_id, player_id, team, role) 
+       VALUES (?, ?, ?, ?)`,
+      [lobbyId, playerId, team, role],
+      function(err) {
         if (err) {
-          resolve({ success: false, error: err.message });
+          reject(err);
         } else {
-          resolve({ success: true, data: rows });
+          resolve({ success: true, lobbyId, playerId, team, role });
         }
       }
     );
   });
 });
 
-fastify.get('/api/teams/:team_id/roster', async (request) => {
-  return new Promise((resolve) => {
-    db.all(
-      `SELECT r.type, r.user_id 
-       FROM roles r
-       JOIN teams t ON r.team_id = t.team_id
-       WHERE r.team_id = ?`,
-      [request.params.team_id],
-      (err, rows) => {
-        if (err) {
-          resolve({ success: false, error: err.message });
-        } else {
-          resolve({ success: true, data: rows });
-        }
-      }
-    );
-  });
-});
-
-fastify.post('/api/teams/:team_id/roles', async (request) => {
-  const { type, user_id } = request.body;
+fastify.delete('/api/lobbies/:lobbyId/leave', async (request, reply) => {
+  const { lobbyId } = request.params;
+  const { discordId } = request.body;
   
-  if (type === 'leader') {
-    return { success: false, error: 'Leader can only be assigned during team creation' };
+  if (!discordId) {
+    return reply.code(400).send({ error: 'Discord ID is required' });
   }
 
-  const role_id = `role_${generateId()}`;
-  
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO roles (role_id, team_id, type, user_id)
-       VALUES (?, ?, ?, ?)`,
-      [role_id, request.params.team_id, type, user_id],
+      `DELETE FROM lobby_players 
+       WHERE lobby_id = ? AND player_id = (
+         SELECT id FROM players WHERE discord_id = ?
+       )`,
+      [lobbyId, discordId],
       function(err) {
         if (err) {
-          resolve({ success: false, error: err.message });
+          reject(err);
         } else {
-          resolve({ success: true, role_id });
+          if (this.changes === 0) {
+            resolve({ success: false, message: 'Player not found in lobby' });
+          } else {
+            resolve({ success: true });
+          }
         }
       }
     );
   });
 });
 
-fastify.get('/api/users/:user_id/team', async (request) => {
-  return new Promise((resolve) => {
+fastify.get('/api/lobbies/:lobbyId', async (request) => {
+  const { lobbyId } = request.params;
+  
+  const lobbyInfo = await new Promise((resolve, reject) => {
     db.get(
-      `SELECT t.* FROM teams t
-       JOIN roles r ON t.team_id = r.team_id
-       WHERE r.user_id = ? AND t.server_id = ?`,
-      [request.params.user_id, request.query.server_id],
+      'SELECT id, guild_id, name, is_active, created_at FROM lobbies WHERE id = ?',
+      [lobbyId],
       (err, row) => {
-        if (err) {
-          resolve({ success: false, error: err.message });
-        } else {
-          resolve({ success: true, data: row || null });
-        }
+        if (err) reject(err);
+        else resolve(row);
       }
     );
   });
+
+  if (!lobbyInfo) {
+    return { error: 'Lobby not found' };
+  }
+
+  const players = await new Promise((resolve, reject) => {
+    db.all(
+      `SELECT p.discord_id, p.discord_name, lp.team, lp.role 
+       FROM lobby_players lp
+       JOIN players p ON lp.player_id = p.id
+       WHERE lp.lobby_id = ?`,
+      [lobbyId],
+      (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      }
+    );
+  });
+
+  return {
+    ...lobbyInfo,
+    players,
+    teams: {
+      light: ['carry', 'mid', 'offlane', 'support', 'hardsupport'].map(role => ({
+        role,
+        player: players.find(p => p.team === 'light' && p.role === role) || null
+      })),
+      dark: ['carry', 'mid', 'offlane', 'support', 'hardsupport'].map(role => ({
+        role,
+        player: players.find(p => p.team === 'dark' && p.role === role) || null
+      }))
+    }
+  };
 });
 
-// Покинуть команду
-fastify.delete('/api/teams/:team_id/members/:user_id', async (request) => {
-  return new Promise((resolve) => {
+fastify.post('/api/lobbies/:lobbyId/close', async (request) => {
+  const { lobbyId } = request.params;
+  
+  return new Promise((resolve, reject) => {
     db.run(
-      `DELETE FROM roles 
-       WHERE team_id = ? AND user_id = ? AND type != 'leader'`,
-      [request.params.team_id, request.params.user_id],
+      'UPDATE lobbies SET is_active = 0 WHERE id = ?',
+      [lobbyId],
       function(err) {
         if (err) {
-          resolve({ success: false, error: err.message });
-        } else if (this.changes === 0) {
-          resolve({ success: false, error: 'Не удалось покинуть команду (возможно, вы лидер)' });
+          reject(err);
         } else {
-          resolve({ success: true });
-        }
-      }
-    );
-  });
-});
-
-// Удалить участника (для лидера)
-fastify.delete('/api/teams/:team_id/members/:user_id/kick', async (request) => {
-  const { user_id, team_id } = request.params;
-  
-  return new Promise((resolve) => {
-    // Проверяем что инициатор - лидер команды
-    db.get(
-      `SELECT 1 FROM teams WHERE team_id = ? AND leader_id = ?`,
-      [team_id, request.query.leader_id],
-      (err, row) => {
-        if (err || !row) {
-          return resolve({ success: false, error: 'Только лидер может удалять участников' });
-        }
-
-        db.run(
-          `DELETE FROM roles 
-           WHERE team_id = ? AND user_id = ? AND type != 'leader'`,
-          [team_id, user_id],
-          function(err) {
-            if (err) {
-              resolve({ success: false, error: err.message });
-            } else if (this.changes === 0) {
-              resolve({ success: false, error: 'Не удалось удалить участника' });
-            } else {
-              resolve({ success: true });
-            }
+          if (this.changes === 0) {
+            resolve({ success: false, message: 'Lobby not found' });
+          } else {
+            resolve({ success: true });
           }
-        );
+        }
       }
     );
   });
 });
-
-// Распустить команду (для лидера или админа)
-fastify.delete('/api/teams/:team_id', async (request) => {
-  const { team_id } = request.params;
-  const { user_id, is_admin } = request.query;
-  
-  return new Promise((resolve) => {
-    // Проверяем что пользователь - лидер или админ
-    db.get(
-      `SELECT 1 FROM teams WHERE team_id = ? AND (leader_id = ? OR ? = 1)`,
-      [team_id, user_id, is_admin ? 1 : 0],
-      (err, row) => {
-        if (err || !row) {
-          return resolve({ 
-            success: false, 
-            error: 'Только лидер команды или администратор сервера может распускать команды' 
-          });
-        }
-
-        db.serialize(() => {
-          db.run(`DELETE FROM roles WHERE team_id = ?`, [team_id]);
-          db.run(`DELETE FROM teams WHERE team_id = ?`, [team_id], function(err) {
-            if (err) {
-              resolve({ success: false, error: err.message });
-            } else {
-              resolve({ success: true });
-            }
-          });
-        });
-      }
-    );
-  });
-});
-
-// Передать лидерство
-fastify.post('/api/teams/:team_id/transfer', async (request) => {
-  const { team_id } = request.params;
-  const { current_leader_id, new_leader_id } = request.body;
-  
-  return new Promise((resolve) => {
-    db.serialize(() => {
-      // Обновляем лидера в таблице teams
-      db.run(
-        `UPDATE teams SET leader_id = ? WHERE team_id = ? AND leader_id = ?`,
-        [new_leader_id, team_id, current_leader_id],
-        function(err) {
-          if (err || this.changes === 0) {
-            return resolve({ success: false, error: 'Не удалось передать лидерство' });
-          }
-          
-          // Обновляем роль в таблице roles
-          db.run(
-            `UPDATE roles SET user_id = ? 
-             WHERE team_id = ? AND type = 'leader'`,
-            [new_leader_id, team_id],
-            function(err) {
-              if (err) {
-                resolve({ success: false, error: err.message });
-              } else {
-                resolve({ success: true });
-              }
-            }
-          );
-        }
-      );
-    });
-  });
-});
-
 
 fastify.get('/api/ping', async () => {
   return { status: 'alive', time: new Date() };
