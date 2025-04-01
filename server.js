@@ -125,7 +125,7 @@ fastify.get('/api/lobbies', async (request, reply) => {
 
   return new Promise((resolve) => {
     db.all(
-      'SELECT id, name, is_active, created_at FROM lobbies WHERE guild_id = ?',
+      'SELECT id, name, is_active, winner, created_at FROM lobbies WHERE guild_id = ?',
       [guildId],
       (err, rows) => {
         if (err) {
@@ -144,7 +144,7 @@ fastify.get('/api/lobbies/:lobbyId', async (request, reply) => {
 
   return new Promise((resolve) => {
     db.get(
-      'SELECT id, guild_id, name, is_active, created_at FROM lobbies WHERE id = ?',
+      'SELECT id, guild_id, name, is_active, winner, created_at FROM lobbies WHERE id = ?',
       [lobbyId],
       (err, lobby) => {
         if (err) {
